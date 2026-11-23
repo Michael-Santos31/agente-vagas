@@ -1,6 +1,6 @@
 llm:
-  provider: deepseek
-  model: deepseek-chat
+  provider: openai
+  model: llama-3.1-8b-instant
 
 min_score: 65           
 max_links_per_site: 25  
