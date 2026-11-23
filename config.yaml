@@ -1,6 +1,6 @@
 llm:
   provider: openai
-  model: llama-3.1-8b-instant
+  model: openai/gpt-oss-20b
 
 min_score: 65           
 max_links_per_site: 25  
