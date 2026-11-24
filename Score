@@ -1,0 +1,286 @@
+
+import json
+import re
+import llm
+
+
+def _lista(valor):
+    """Converte textos separados por vírgula ou linhas em listas."""
+    if isinstance(valor, list):
+        return [str(x).strip() for x in valor if str(x).strip()]
+
+    if not valor:
+        return []
+
+    return [
+        item.strip(" -•\t")
+        for item in re.split(r"[,;\n]+", str(valor))
+        if item.strip(" -•\t")
+    ]
+
+
+def _experiencias(valor):
+    """Interpreta experiências em texto ou lista de dicionários."""
+    if isinstance(valor, list):
+        resultado = []
+
+        for exp in valor:
+            if isinstance(exp, dict):
+                resultado.append(
+                    f"- {exp.get('cargo', '')} na "
+                    f"{exp.get('empresa', '')} "
+                    f"({exp.get('periodo', '')}): "
+                    f"{exp.get('descricao', '')}"
+                )
+            else:
+                resultado.append(f"- {exp}")
+
+        return resultado
+
+    return [
+        f"- {linha.strip()}"
+        for linha in str(valor or "").splitlines()
+        if linha.strip()
+    ]
+
+
+def formatar_perfil_para_ia(profile_dict):
+    """Transforma o perfil salvo no painel em texto para a IA."""
+
+    if not profile_dict:
+        return "PERFIL NÃO PREENCHIDO."
+
+    p = profile_dict
+
+    experiencias = _experiencias(
+        p.get("experiencias", p.get("experiencias_txt", ""))
+    )
+
+    formacao = _lista(p.get("formacao", ""))
+
+    habilidades = _lista(
+        p.get("habilidades", p.get("habilidades_txt", ""))
+    )
+
+    cargos_desejados = _lista(
+        p.get("cargos_desejados", p.get("cargos_desejados_txt", ""))
+    )
+
+    cargos_nao = _lista(
+        p.get("cargos_nao_desejados", p.get("cargos_nao_txt", ""))
+    )
+
+    cidades = _lista(
+        p.get("cidades_aceitas", p.get("cidades_aceitas_txt", ""))
+    )
+
+    exemplos = p.get(
+        "exemplos_escrita", p.get("exemplos_escrita_txt", "")
+    )
+
+    if isinstance(exemplos, list):
+        exemplos_txt = "\n".join(str(x) for x in exemplos if x)
+    else:
+        exemplos_txt = str(exemplos or "")
+
+    return f"""
+--- PERFIL DO CANDIDATO ---
+
+Nome: {p.get('nome', 'Não informado')}
+Localização: {p.get('localizacao', 'Não informada')}
+
+RESUMO PROFISSIONAL:
+{p.get('resumo', '')}
+
+EXPERIÊNCIAS PROFISSIONAIS:
+{chr(10).join(experiencias) if experiencias else 'Não informado'}
+
+FORMAÇÃO:
+{chr(10).join(formacao) if formacao else str(p.get('formacao', 'Não informada'))}
+
+HABILIDADES:
+{', '.join(habilidades) if habilidades else 'Não informadas'}
+
+OBJETIVOS PROFISSIONAIS:
+Cargos desejados: {', '.join(cargos_desejados) if cargos_desejados else 'Não informado'}
+Cargos que não deseja: {', '.join(cargos_nao) if cargos_nao else 'Não informado'}
+Modelo de trabalho: {p.get('modelo_trabalho', 'Não informado')}
+Cidades aceitas: {', '.join(cidades) if cidades else 'Não informado'}
+Salário mínimo: R$ {p.get('salario_minimo', 'A combinar')}
+
+EXEMPLOS DE ESCRITA:
+{exemplos_txt if exemplos_txt else 'Não informado'}
+"""
+
+
+def _extrair_json(texto):
+    """Extrai e valida o JSON retornado pela IA."""
+
+    texto = texto.strip()
+    texto = re.sub(r"^```(?:json)?\s*", "", texto)
+    texto = re.sub(r"\s*```$", "", texto)
+
+    try:
+        resultado = json.loads(texto)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", texto, re.DOTALL)
+
+        if not match:
+            raise ValueError("A IA não retornou um JSON válido.")
+
+        resultado = json.loads(match.group(0))
+
+    if not isinstance(resultado, dict):
+        raise ValueError("O resultado da IA não é um objeto JSON.")
+
+    resultado["score"] = max(
+        0, min(100, int(resultado.get("score", 0)))
+    )
+
+    resultado["is_job_posting"] = (
+        resultado.get("is_job_posting") is True
+    )
+
+    resultado.setdefault("title", "Não identificado")
+    resultado.setdefault("company", "Não identificada")
+    resultado.setdefault("location", "Não informada")
+    resultado.setdefault("reason", "Sem justificativa.")
+    resultado.setdefault("discard_reason", "")
+
+    if not isinstance(resultado.get("missing_requirements"), list):
+        resultado["missing_requirements"] = []
+
+    return resultado
+
+
+def evaluate(job_text, url, profile_dict):
+    """Avalia a compatibilidade entre uma vaga e o candidato."""
+
+    perfil_txt = formatar_perfil_para_ia(profile_dict)
+
+    system_prompt = """
+Você é um avaliador rigoroso de vagas de emprego.
+
+Analise a vaga considerando exclusivamente os dados reais do candidato.
+
+Responda SOMENTE com JSON válido neste formato:
+
+{
+  "is_job_posting": true,
+  "title": "Título da vaga",
+  "company": "Empresa",
+  "location": "Localização",
+  "score": 0,
+  "reason": "Justificativa objetiva",
+  "discard_reason": "",
+  "missing_requirements": []
+}
+
+REGRAS:
+
+1. Se não for uma vaga específica, use is_job_posting=false e score=0.
+2. A nota deve refletir a compatibilidade real com o candidato.
+3. Considere experiência, habilidades, formação, localização,
+   salário, modelo de trabalho e senioridade.
+4. Não invente habilidades ou experiências.
+5. Se exigir requisito obrigatório que o candidato não possui,
+   reduza significativamente a nota.
+6. Se o cargo estiver na lista de cargos não desejados,
+   atribua nota abaixo de 40.
+7. Se o salário estiver claramente abaixo do mínimo,
+   atribua nota abaixo de 40.
+8. Se a vaga não for remota e estiver fora das cidades aceitas,
+   atribua nota abaixo de 50.
+9. Se o salário não estiver informado, não penalize.
+10. Diferencie requisitos obrigatórios de desejáveis.
+11. Não confunda uma página de busca com uma vaga específica.
+12. Não considere uma habilidade como comprovada apenas porque
+    ela aparece como requisito na descrição da vaga.
+"""
+
+    user_prompt = f"""
+AVALIE ESTA VAGA:
+
+URL: {url}
+
+TEXTO DA VAGA:
+{job_text}
+
+{perfil_txt}
+"""
+
+    try:
+        resposta = llm.ask(
+            system_prompt,
+            user_prompt,
+            max_tokens=1000
+        )
+
+        resultado = _extrair_json(resposta)
+
+        if not resultado["is_job_posting"]:
+            resultado["score"] = 0
+
+        return resultado
+
+    except Exception as erro:
+        print(f"Erro ao avaliar vaga: {erro}")
+        return None
+
+
+def write_letter(job_text, job, profile_dict):
+    """Gera uma carta de apresentação baseada no perfil real."""
+
+    perfil_txt = formatar_perfil_para_ia(profile_dict)
+
+    system_prompt = """
+Você escreve cartas de apresentação profissionais
+em português brasileiro.
+
+Seu objetivo é escrever como o próprio candidato.
+
+REGRAS:
+
+1. Escreva entre 120 e 180 palavras.
+2. Use linguagem natural, profissional e direta.
+3. Não use clichês como 'apaixonado por desafios'.
+4. Utilize somente informações verdadeiras do perfil.
+5. Nunca invente empresas, cursos, habilidades ou experiências.
+6. Relacione a experiência real do candidato com a vaga.
+7. Não mencione requisitos que o candidato não possui.
+8. Não invente resultados ou números.
+9. Não comece com saudações exageradas.
+
+Retorne somente o texto da carta.
+"""
+
+    user_prompt = f"""
+VAGA:
+Cargo: {job.get('title', 'Não informado')}
+Empresa: {job.get('company', 'Não informada')}
+
+DESCRIÇÃO:
+{job_text}
+
+PERFIL:
+{perfil_txt}
+
+Escreva a carta de apresentação.
+"""
+
+    try:
+        carta = llm.ask(
+            system_prompt,
+            user_prompt,
+            max_tokens=600
+        )
+
+        if not carta or not carta.strip():
+            raise ValueError("A IA retornou uma carta vazia.")
+
+        return carta.strip()
+
+    except Exception as erro:
+        print(f"Erro ao gerar carta: {erro}")
+        return "Erro ao gerar a carta. Tente novamente mais tarde."
+        
