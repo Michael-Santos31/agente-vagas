@@ -60,7 +60,7 @@ ESTADOS = {
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def carregar_municipios(uf):
-    """Carrega os municípios do estado usando a API oficial do IBGE."""
+    """Carrega os municípios pela API oficial do IBGE."""
 
     if not uf:
         return []
@@ -80,7 +80,6 @@ def carregar_municipios(uf):
             requisicao,
             timeout=15
         ) as resposta:
-
             dados = json.loads(
                 resposta.read().decode("utf-8")
             )
@@ -95,7 +94,7 @@ def carregar_municipios(uf):
 
 
 def selecionar_localizacao(prefixo):
-    """Cria os seletores de estado e cidade."""
+    """Cria seletores dependentes de estado e cidade."""
 
     estado_opcoes = ["Todos"] + list(ESTADOS.keys())
 
@@ -137,6 +136,10 @@ def selecionar_localizacao(prefixo):
         "" if cidade == "Todas" else cidade
     )
 
+
+# ==========================================
+# FUNÇÕES AUXILIARES
+# ==========================================
 
 def mostrar_erro(titulo, erro):
     st.error(
@@ -431,6 +434,421 @@ elif pagina == "⚙️ Configurações":
 
     st.divider()
     st.subheader("Conexão com inteligência artificial")
+
+    if st.button(
+        "🧪 Testar conexão com IA",
+        use_container_width=True
+    ):
+
+        try:
+            with st.spinner("Testando conexão..."):
+                sucesso, mensagem = llm.test_connection()
+
+            if sucesso:
+                st.success(mensagem)
+            else:
+                st.error(mensagem)
+
+        except Exception as erro:
+            mostrar_erro(
+                "Falha no teste da IA",
+                erro
+            )
+
+    st.divider()
+    st.subheader("Exportar dados")
+
+    if st.button(
+        "Preparar arquivo CSV",
+        use_container_width=True
+    ):
+
+        try:
+            caminho = "vagas_exportadas.csv"
+            db.export_csv(caminho)
+
+            with open(caminho, "rb") as arquivo:
+                dados_csv = arquivo.read()
+
+            st.download_button(
+                "⬇️ Baixar minhas vagas",
+                data=dados_csv,
+                file_name="minhas_vagas.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+            if os.path.exists(caminho):
+                os.remove(caminho)
+
+        except Exception as erro:
+            mostrar_erro(
+                "Erro ao exportar CSV",
+                erro
+            )
+
+
+# ==========================================
+# PÁGINA: PAINEL DE VAGAS
+# ==========================================
+
+elif pagina == "📊 Painel de Vagas":
+
+    st.header("📊 Painel de Vagas")
+
+    # --------------------------------------
+    # EXECUTAR BUSCA
+    # --------------------------------------
+
+    st.subheader("Busca de oportunidades")
+
+    st.write(
+        "Escolha onde o agente deve procurar novas oportunidades."
+    )
+
+    estado_busca, cidade_busca = selecionar_localizacao(
+        "busca"
+    )
+
+    if st.button(
+        "🚀 Buscar vagas agora",
+        type="primary",
+        use_container_width=True
+    ):
+
+        linhas_log = []
+
+        def registrar_log(mensagem):
+            linhas_log.append(str(mensagem))
+
+        filtros = {
+            "estado": estado_busca,
+            "cidade": cidade_busca
+        }
+
+        try:
+            with st.spinner(
+                "O agente está procurando e analisando vagas. Aguarde..."
+            ):
+
+                resultado = pipeline.run_once(
+                    log=registrar_log,
+                    filtros=filtros
+                )
+
+            st.success("Busca finalizada!")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.metric(
+                    "Encontradas",
+                    resultado.get("encontradas", 0)
+                )
+
+                st.metric(
+                    "Analisadas",
+                    resultado.get("analisadas", 0)
+                )
+
+            with col2:
+                st.metric(
+                    "Boas oportunidades",
+                    resultado.get("para_avaliar", 0)
+                )
+
+                st.metric(
+                    "Descartadas",
+                    resultado.get("descartadas", 0)
+                )
+
+            with col3:
+                st.metric(
+                    "Ignoradas",
+                    resultado.get("ignoradas", 0)
+                )
+
+                st.metric(
+                    "Erros",
+                    resultado.get("erros", 0)
+                )
+
+        except Exception as erro:
+            mostrar_erro(
+                "Falha durante a busca",
+                erro
+            )
+
+        if linhas_log:
+
+            with st.expander(
+                "📋 Ver registro da busca",
+                expanded=True
+            ):
+
+                st.code(
+                    "\n".join(linhas_log[-100:]),
+                    language="text"
+                )
+
+    st.divider()
+
+    # --------------------------------------
+    # MÉTRICAS DAS CANDIDATURAS
+    # --------------------------------------
+
+    st.subheader("Resumo das candidaturas")
+
+    try:
+        contagens = db.counts() or {}
+
+    except Exception as erro:
+        contagens = {}
+
+        mostrar_erro(
+            "Erro ao consultar métricas",
+            erro
+        )
+
+    metricas = [
+        ("Analisadas", contagens.get("total", 0)),
+        ("Para avaliar", contagens.get("para_avaliar", 0)),
+        ("Candidatadas", contagens.get("candidatada", 0)),
+        ("Em processo", contagens.get("em_processo", 0)),
+        ("Descartadas", contagens.get("descartada", 0))
+    ]
+
+    # Bloco corrigido: indentação uniforme.
+    for inicio in range(0, len(metricas), 2):
+
+        colunas = st.columns(2)
+
+        itens_linha = metricas[inicio:inicio + 2]
+
+        for coluna, item in zip(colunas, itens_linha):
+
+            with coluna:
+                st.metric(
+                    item[0],
+                    item[1]
+                )
+
+    st.divider()
+
+    # --------------------------------------
+    # FILTROS DAS VAGAS SALVAS
+    # --------------------------------------
+
+    st.subheader("Minhas vagas")
+
+    filtro_status = st.selectbox(
+        "Filtrar por status",
+        [
+            "Todas",
+            "para_avaliar",
+            "candidatada",
+            "em_processo",
+            "pendente",
+            "descartada"
+        ],
+        key="filtro_status"
+    )
+
+    filtro_busca = st.text_input(
+        "Buscar por empresa ou cargo",
+        key="filtro_texto"
+    )
+
+    filtro_nota = st.slider(
+        "Nota mínima",
+        min_value=0,
+        max_value=100,
+        value=0,
+        key="filtro_nota"
+    )
+
+    st.write("Filtrar vagas por localização:")
+
+    estado_lista, cidade_lista = selecionar_localizacao(
+        "lista"
+    )
+
+    # --------------------------------------
+    # CARREGAR VAGAS
+    # --------------------------------------
+
+    try:
+        vagas = db.list_jobs() or []
+
+    except Exception as erro:
+        vagas = []
+
+        mostrar_erro(
+            "Erro ao carregar vagas",
+            erro
+        )
+
+    vagas_filtradas = []
+
+    for vaga in vagas:
+
+        if (
+            filtro_status != "Todas"
+            and vaga.get("status") != filtro_status
+        ):
+            continue
+
+        if (vaga.get("score") or 0) < filtro_nota:
+            continue
+
+        if filtro_busca:
+
+            termo = normalizar(filtro_busca)
+
+            titulo_vaga = normalizar(
+                vaga.get("title", "")
+            )
+
+            empresa_vaga = normalizar(
+                vaga.get("company", "")
+            )
+
+            if (
+                termo not in titulo_vaga
+                and termo not in empresa_vaga
+            ):
+                continue
+
+        if not vaga_corresponde_local(
+            vaga,
+            estado_lista,
+            cidade_lista
+        ):
+            continue
+
+        vagas_filtradas.append(vaga)
+
+    st.caption(
+        f"{len(vagas_filtradas)} oportunidade(s) encontrada(s)."
+    )
+
+    if not vagas_filtradas:
+        st.info(
+            "Nenhuma vaga encontrada. Execute uma busca ou altere os filtros."
+        )
+
+    # --------------------------------------
+    # EXIBIR VAGAS
+    # --------------------------------------
+
+    for vaga in vagas_filtradas:
+
+        score_vaga = vaga.get("score") or 0
+        status = vaga.get("status", "")
+
+        icone = (
+            "🟢" if score_vaga >= 65
+            else "🔴" if status == "descartada"
+            else "🟡"
+        )
+
+        titulo = (
+            f"{icone} Nota {score_vaga} | "
+            f"{vaga.get('title', 'Sem título')}"
+        )
+
+        with st.expander(titulo):
+
+            st.write(
+                f"**Empresa:** {vaga.get('company', 'Não informada')}"
+            )
+
+            url = vaga.get("url", "")
+
+            if url:
+                st.markdown(
+                    f"[🔗 Abrir vaga]({url})"
+                )
+
+            st.write(
+                f"**Local:** {vaga.get('location', '')}"
+            )
+
+            st.write(
+                f"**Fonte:** {vaga.get('source', '')}"
+            )
+
+            st.write(
+                f"**Encontrada em:** "
+                f"{str(vaga.get('found_at', ''))[:10]}"
+            )
+
+            st.info(
+                f"**Justificativa da IA:** "
+                f"{vaga.get('reason', '')}"
+            )
+
+            if status == "descartada":
+
+                st.error(
+                    f"**Motivo do descarte:** "
+                    f"{vaga.get('discard_reason', '')}"
+                )
+
+            carta = vaga.get("cover_letter")
+
+            if carta:
+
+                st.warning(
+                    "Revise a carta antes de utilizar."
+                )
+
+                st.text_area(
+                    "Carta de apresentação sugerida",
+                    value=carta,
+                    height=180,
+                    key=f"carta_{vaga['id']}"
+                )
+
+            st.divider()
+
+            # Formulário individual para cada vaga.
+            with st.form(
+                f"form_vaga_{vaga['id']}"
+            ):
+
+                opcoes_status = [
+                    "para_avaliar",
+                    "candidatada",
+                    "em_processo",
+                    "pendente",
+                    "descartada"
+                ]
+
+                indice_status = (
+                    opcoes_status.index(status)
+                    if status in opcoes_status
+                    else 0
+                )
+
+                novo_status = st.selectbox(
+                    "Status da candidatura",
+                    opcoes_status,
+                    index=indice_status
+                )
+
+                novas_notas = st.text_area(
+                    "Minhas anotações",
+                    value=vaga.get("notes", "") or "",
+                    height=90
+                )
+
+                salvar_alteracoes = st.form_submit_button(
+                    "💾 Salvar alterações",
+                    use_container_width=True
+                )
+
+           ência artificial")
 
     if st.button(
         "🧪 Testar conexão com IA",
