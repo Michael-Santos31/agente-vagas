@@ -12,9 +12,19 @@ from contextlib import contextmanager
 # CONFIGURAÇÃO
 # =========================================================
 
-DATABASE_URL = (
-    os.getenv("DATABASE_URL")
-    or os.getenv("SUPABASE_DB_URL")
+try:
+    import streamlit as st
+    DATABASE_URL = (
+        st.secrets.get("DATABASE_URL")
+        or st.secrets.get("SUPABASE_DB_URL")
+        or os.getenv("DATABASE_URL")
+        or os.getenv("SUPABASE_DB_URL")
+    )
+except Exception:
+    DATABASE_URL = (
+        os.getenv("DATABASE_URL")
+        or os.getenv("SUPABASE_DB_URL")
+    )
 )
 
 DB_DIR = Path("data")
