@@ -1,45 +1,94 @@
+"""Integração com Groq, OpenAI, DeepSeek e Anthropic."""
+
 import os
 import time
+
 import yaml
 from dotenv import load_dotenv
 
-# Carrega as variáveis do arquivo .env
 load_dotenv()
 
 
 def get_config():
-    """Lê o arquivo config.yaml para saber qual IA usar."""
     try:
-        with open("config.yaml", "r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
+        with open("config.yaml", "r", encoding="utf-8") as arquivo:
+            return yaml.safe_load(arquivo) or {}
     except FileNotFoundError:
-        return {"llm": {"provider": "deepseek", "model": "deepseek-chat"}}
+        return {}
+
+
+def _get_settings():
+    config = get_config()
+    settings = config.get("llm", {}) or {}
+
+    model = os.getenv("LLM_MODEL", settings.get(
+        "model", "openai/gpt-oss-20b"
+    ))
+
+    provider = os.getenv("LLM_PROVIDER", settings.get("provider", "groq"))
+
+    # O identificador openai/gpt-oss-20b é utilizado no Groq.
+    if model.startswith("openai/") and "LLM_PROVIDER" not in os.environ:
+        provider = "groq"
+
+    return {
+        "provider": provider.lower().strip(),
+        "model": model.strip(),
+        "base_url": os.getenv("OPENAI_BASE_URL")
+    }
+
+
+def _create_client(provider, base_url=None):
+    from openai import OpenAI
+
+    if provider == "groq":
+        api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("Configure GROQ_API_KEY nas variáveis de ambiente.")
+
+        return OpenAI(
+            api_key=api_key,
+            base_url=base_url or "https://api.groq.com/openai/v1"
+        )
+
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("Configure OPENAI_API_KEY.")
+
+        return OpenAI(api_key=api_key, base_url=base_url)
+
+    if provider == "deepseek":
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        if not api_key:
+            raise ValueError("Configure DEEPSEEK_API_KEY.")
+
+        return OpenAI(
+            api_key=api_key,
+            base_url=base_url or "https://api.deepseek.com"
+        )
+
+    raise ValueError(f"Provedor desconhecido: {provider}")
 
 
 def ask(system_prompt, user_prompt, max_tokens=1500):
-    """
-    Conecta com a API do DeepSeek e retorna o texto.
-    Possui sistema de tentativas (retry) caso a rede falhe.
-    """
-    config = get_config().get("llm", {})
-    provider = os.getenv("LLM_PROVIDER", config.get("provider", "deepseek")).lower()
-    model = config.get("model", "deepseek-chat")
+    settings = _get_settings()
+    provider = settings["provider"]
+    model = settings["model"]
 
-    print(f"[LLM] Conectando ao provedor: {provider.upper()} (Modelo: {model})")
+    print(f"[LLM] Provedor: {provider.upper()} | Modelo: {model}")
 
-    tentativas = 3
-    for tentativa in range(1, tentativas + 1):
+    ultimo_erro = None
+
+    for tentativa in range(1, 4):
         try:
-            if provider == "deepseek":
-                # 🔥 INTEGRAÇÃO COM O DEEPSEEK 🔥
-                api_key = os.getenv("DEEPSEEK_API_KEY")
-                if not api_key:
-                    raise ValueError("Chave DEEPSEEK_API_KEY não encontrada no arquivo .env")
+            if provider in ("groq", "openai", "deepseek"):
+                client = _create_client(
+                    provider,
+                    settings["base_url"]
+                )
 
-                from openai import OpenAI
-                client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-
-                response = client.chat.completions.create(
+                resposta = client.chat.completions.create(
                     model=model,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -48,47 +97,69 @@ def ask(system_prompt, user_prompt, max_tokens=1500):
                     max_tokens=max_tokens,
                     timeout=60
                 )
-                return response.choices[0].message.content
 
-            elif provider == "anthropic":
-                api_key = os.getenv("ANTHROPIC_API_KEY")
-                if not api_key: raise ValueError("Chave ANTHROPIC_API_KEY ausente.")
+                texto = resposta.choices[0].message.content
+
+                if not texto:
+                    raise RuntimeError("O modelo retornou uma resposta vazia.")
+
+                return texto.strip()
+
+            if provider == "anthropic":
                 import anthropic
-                client = anthropic.Anthropic(api_key=api_key)
-                response = client.messages.create(
-                    model=model, max_tokens=max_tokens, system=system_prompt,
-                    messages=[{"role": "user", "content": user_prompt}]
-                )
-                return response.content[0].text
 
-            elif provider == "openai":
-                api_key = os.getenv("OPENAI_API_KEY")
-                if not api_key: raise ValueError("Chave OPENAI_API_KEY ausente.")
-                from openai import OpenAI
-                client = OpenAI(api_key=api_key)
-                response = client.chat.completions.create(
+                api_key = os.getenv("ANTHROPIC_API_KEY")
+                if not api_key:
+                    raise ValueError("Configure ANTHROPIC_API_KEY.")
+
+                client = anthropic.Anthropic(
+                    api_key=api_key,
+                    timeout=60
+                )
+
+                resposta = client.messages.create(
                     model=model,
-                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                    max_tokens=max_tokens
+                    max_tokens=max_tokens,
+                    system=system_prompt,
+                    messages=[
+                        {"role": "user", "content": user_prompt}
+                    ]
                 )
-                return response.choices[0].message.content
 
-            else:
-                raise ValueError(f"Provedor '{provider}' desconhecido.")
+                texto = "".join(
+                    bloco.text
+                    for bloco in resposta.content
+                    if getattr(bloco, "type", None) == "text"
+                )
 
-        except Exception as e:
-            erro_msg = str(e)
-            print(f"[LLM] Erro na tentativa {tentativa}/{tentativas}: {erro_msg}")
-            if tentativa == tentativas:
-                raise Exception(f"Falha ao contatar a IA após {tentativas} tentativas. Erro: {erro_msg}")
-            time.sleep(tentativa * 2)  # Espera 2s, depois 4s
+                if not texto:
+                    raise RuntimeError("O modelo retornou uma resposta vazia.")
+
+                return texto.strip()
+
+            raise ValueError(f"Provedor não suportado: {provider}")
+
+        except Exception as erro:
+            ultimo_erro = erro
+            print(f"[LLM] Tentativa {tentativa}/3 falhou: {erro}")
+
+            if tentativa < 3:
+                time.sleep(tentativa * 2)
+
+    raise RuntimeError(
+        f"Falha na comunicação com {provider}: {ultimo_erro}"
+    ) from ultimo_erro
 
 
-# Função utilitária para o painel web (testar a conexão)
 def test_connection():
-    """Testa se a chave do DeepSeek está funcionando (usado no dashboard)."""
     try:
-        res = ask("Você é um assistente.", "Responda apenas: OK", max_tokens=10)
-        return True, "Conexão com a IA estabelecida com sucesso!"
-    except Exception as e:
-        return False, str(e)
+        resposta = ask(
+            "Você é um assistente objetivo.",
+            "Responda apenas: OK",
+            max_tokens=20
+        )
+
+        return True, f"Conexão estabelecida! Resposta: {resposta}"
+
+    except Exception as erro:
+        return False, str(erro)
