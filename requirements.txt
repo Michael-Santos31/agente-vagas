@@ -7,3 +7,4 @@ python-dotenv
 imap-tools
 openai
 anthropic
+psycopg[binary]>=3.2
