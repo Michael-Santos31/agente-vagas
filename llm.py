@@ -1,3 +1,4 @@
+
 """Integração com Groq, OpenAI, DeepSeek e Anthropic."""
 
 import os
@@ -66,10 +67,7 @@ def _create_client(provider, base_url=None):
         if not api_key:
             raise ValueError("Configure OPENAI_API_KEY.")
 
-        return OpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
+        return OpenAI(api_key=api_key, base_url=base_url)
 
     if provider == "deepseek":
         api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -114,13 +112,24 @@ def ask(system_prompt, user_prompt, max_tokens=1500):
                             "content": user_prompt
                         }
                     ],
-                    "max_tokens": max(max_tokens, 300),
                     "timeout": 60
                 }
 
                 if provider == "groq":
+                    parametros["max_completion_tokens"] = max(
+                        max_tokens, 1024
+                    )
                     parametros["include_reasoning"] = False
-                    parametros["reasoning_effort"] = "low"
+
+                    if model in (
+                        "openai/gpt-oss-20b",
+                        "openai/gpt-oss-120b"
+                    ):
+                        parametros["reasoning_effort"] = "low"
+                else:
+                    parametros["max_tokens"] = max(
+                        max_tokens, 1024
+                    )
 
                 resposta = client.chat.completions.create(
                     **parametros
@@ -131,7 +140,8 @@ def ask(system_prompt, user_prompt, max_tokens=1500):
                         "A API não retornou nenhuma escolha."
                     )
 
-                mensagem = resposta.choices[0].message
+                escolha = resposta.choices[0]
+                mensagem = escolha.message
                 texto = mensagem.content
 
                 if isinstance(texto, list):
@@ -142,11 +152,20 @@ def ask(system_prompt, user_prompt, max_tokens=1500):
                     )
 
                 if not texto or not texto.strip():
-                    motivo = resposta.choices[0].finish_reason
+                    motivo = escolha.finish_reason
+                    raciocinio = getattr(
+                        mensagem, "reasoning", None
+                    )
+
+                    tamanho_raciocinio = (
+                        len(raciocinio) if raciocinio else 0
+                    )
 
                     raise RuntimeError(
-                        f"O modelo retornou uma resposta vazia. "
-                        f"Motivo: {motivo}"
+                        "Resposta vazia da API. "
+                        f"Motivo: {motivo}. "
+                        f"Caracteres de raciocínio: "
+                        f"{tamanho_raciocinio}."
                     )
 
                 return texto.strip()
@@ -166,7 +185,7 @@ def ask(system_prompt, user_prompt, max_tokens=1500):
 
                 resposta = client.messages.create(
                     model=model,
-                    max_tokens=max(max_tokens, 300),
+                    max_tokens=max(max_tokens, 1024),
                     system=system_prompt,
                     messages=[
                         {
@@ -213,10 +232,11 @@ def test_connection():
         resposta = ask(
             "Você é um assistente objetivo.",
             "Responda apenas com a palavra OK.",
-            max_tokens=300
+            max_tokens=1024
         )
 
         return True, f"Conexão estabelecida! Resposta: {resposta}"
 
     except Exception as erro:
         return False, str(erro)
+        
