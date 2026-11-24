@@ -1,67 +1,91 @@
+
 import streamlit as st
-import pandas as pd
-import time
 import os
-import io
 import db
 import pipeline
 import llm
 
-# Configuração da página (deve ser a primeira coisa a rodar)
 st.set_page_config(page_title="Agente de Vagas", page_icon="🤖", layout="wide")
-
 st.title("🤖 Candidaturas - Agente de Vagas")
 
-# Cria as abas do painel
-aba_vagas, aba_perfil, aba_config = st.tabs(["📊 Painel de Vagas", "👤 Meu Perfil", "⚙️ Configurações e Testes"])
+aba_vagas, aba_perfil, aba_config = st.tabs(
+    ["📊 Painel de Vagas", "👤 Meu Perfil", "⚙️ Configurações e Testes"]
+)
 
 # ==========================================
-# ABA 2: MEU PERFIL (A que você pediu!)
+# ABA 2: MEU PERFIL
 # ==========================================
 with aba_perfil:
     st.header("Meus Dados e Estilo de Escrita")
-    st.info(
-        "Preencha seus dados reais. A Inteligência Artificial usará essas informações para dar as notas e escrever as cartas.")
-
-    # Carrega o perfil do banco de dados
-    perfil_salvo = db.get_profile()
+    perfil_salvo = db.get_profile() or {}
 
     with st.form("form_perfil"):
         col1, col2 = st.columns(2)
+
         with col1:
             nome = st.text_input("Seu Nome Completo", value=perfil_salvo.get("nome", ""))
             localizacao = st.text_input("Sua Localização (Cidade/UF)", value=perfil_salvo.get("localizacao", ""))
-            salario = st.text_input("Salário Mínimo Desejado (Ex: R$ 3.500)",
-                                    value=perfil_salvo.get("salario_minimo", ""))
-        with col2:
-            modelo_trabalho = st.selectbox("Modelo de Trabalho Preferido",
-                                           ["Remoto", "Híbrido", "Presencial", "Indiferente"], index=0)
-            cidades_aceitas = st.text_input("Cidades que aceita (se presencial/híbrido)",
-                                            value=perfil_salvo.get("cidades_aceitas_txt", ""))
-            cargos_nao = st.text_input("Cargos que você NÃO quer de jeito nenhum",
-                                       value=perfil_salvo.get("cargos_nao_txt", ""))
+            salario = st.text_input("Salário Mínimo Desejado", value=perfil_salvo.get("salario_minimo", ""))
 
-        resumo = st.text_area("Resumo Profissional (3 a 5 linhas)", value=perfil_salvo.get("resumo", ""), height=100)
+        with col2:
+            modelos = ["Remoto", "Híbrido", "Presencial", "Indiferente"]
+            modelo_salvo = perfil_salvo.get("modelo_trabalho", "Remoto")
+            indice = modelos.index(modelo_salvo) if modelo_salvo in modelos else 0
+
+            modelo_trabalho = st.selectbox(
+                "Modelo de Trabalho Preferido", modelos, index=indice
+            )
+
+            cidades_aceitas = st.text_input(
+                "Cidades que aceita",
+                value=perfil_salvo.get("cidades_aceitas_txt", "")
+            )
+
+            cargos_nao = st.text_input(
+                "Cargos que NÃO quer",
+                value=perfil_salvo.get("cargos_nao_txt", "")
+            )
+
+        resumo = st.text_area(
+            "Resumo Profissional",
+            value=perfil_salvo.get("resumo", ""),
+            height=100
+        )
 
         st.subheader("Habilidades e Formação")
-        habilidades_txt = st.text_area("Habilidades que você REALMENTE tem (separe por vírgula)",
-                                       value=perfil_salvo.get("habilidades_txt", ""), height=80)
-        formacao = st.text_area("Formação e Cursos", value=perfil_salvo.get("formacao", ""), height=80)
+
+        habilidades_txt = st.text_area(
+            "Habilidades",
+            value=perfil_salvo.get("habilidades_txt", ""),
+            height=80
+        )
+
+        formacao = st.text_area(
+            "Formação e Cursos",
+            value=perfil_salvo.get("formacao", ""),
+            height=80
+        )
 
         st.subheader("Experiências")
-        st.write("(Escreva uma por linha no formato: Cargo | Empresa | Período | O que fez)")
-        experiencias_txt = st.text_area("Experiências Profissionais", value=perfil_salvo.get("experiencias_txt", ""),
-                                        height=150)
 
-        st.subheader("Meu Jeito de Escrever (Exemplos)")
-        st.write("Cole de 2 a 3 cartas de apresentação antigas ou textos seus. A IA vai copiar o seu tom de voz.")
-        exemplos = st.text_area("Textos de Exemplo", value=perfil_salvo.get("exemplos_escrita_txt", ""), height=200)
+        experiencias_txt = st.text_area(
+            "Experiências Profissionais",
+            value=perfil_salvo.get("experiencias_txt", ""),
+            height=150
+        )
 
-        botao_salvar_perfil = st.form_submit_button("💾 Salvar Perfil", type="primary")
+        st.subheader("Meu Jeito de Escrever")
 
-        if botao_salvar_perfil:
-            # Converte as listas separadas por vírgula/linha em listas reais
-            dados_perfil = {
+        exemplos = st.text_area(
+            "Textos de Exemplo",
+            value=perfil_salvo.get("exemplos_escrita_txt", ""),
+            height=200
+        )
+
+        salvar = st.form_submit_button("💾 Salvar Perfil", type="primary")
+
+        if salvar:
+            dados = {
                 "nome": nome,
                 "localizacao": localizacao,
                 "salario_minimo": salario,
@@ -74,155 +98,307 @@ with aba_perfil:
                 "experiencias_txt": experiencias_txt,
                 "exemplos_escrita_txt": exemplos
             }
-            db.save_profile(dados_perfil)
-            st.success("Perfil salvo com sucesso! O robô já pode usar essas informações.")
-            time.sleep(1.5)
-            st.rerun()
+
+            try:
+                db.save_profile(dados)
+                st.success("Perfil salvo com sucesso!")
+            except Exception as e:
+                st.error(f"Erro ao salvar perfil: {e}")
+
 
 # ==========================================
 # ABA 1: PAINEL DE VAGAS
 # ==========================================
 with aba_vagas:
-    # --- BARRA LATERAL ---
+
     with st.sidebar:
         st.header("Ações do Agente")
 
-        # Botão de Buscar
-        if st.button("🚀 Buscar vagas agora", use_container_width=True, type="primary"):
-            with st.spinner("O robô está trabalhando. Isso pode levar alguns minutos..."):
-                log_placeholder = st.empty()
+        if st.button(
+            "🚀 Buscar vagas agora",
+            use_container_width=True,
+            type="primary"
+        ):
 
+            st.subheader("Registro da busca")
 
-                def escrever_log(msg):
-                    log_placeholder.code(msg, language="text")
+            log_placeholder = st.empty()
+            resultado_placeholder = st.empty()
+            linhas_log = []
 
+            def escrever_log(msg):
+                mensagem = str(msg)
+                linhas_log.append(mensagem)
 
-                stats = pipeline.run_once(log=escrever_log)
-                st.success(f"Rodada finalizada! Analisadas: {stats['analisadas']} | Boas: {stats['para_avaliar']}")
-                time.sleep(2)
-                st.rerun()
+                log_placeholder.code(
+                    "\n".join(linhas_log[-100:]),
+                    language="text"
+                )
+
+            try:
+                with st.spinner("O robô está trabalhando. Aguarde..."):
+                    stats = pipeline.run_once(log=escrever_log)
+
+                resultado_placeholder.success(
+                    "Rodada finalizada!\n\n"
+                    f"Analisadas: {stats.get('analisadas', 0)}\n\n"
+                    f"Boas: {stats.get('para_avaliar', 0)}\n\n"
+                    f"Descartadas: {stats.get('descartadas', 0)}\n\n"
+                    f"Erros: {stats.get('erros', 0)}"
+                )
+
+                if stats.get("analisadas", 0) == 0:
+                    st.warning(
+                        "Nenhuma vaga foi analisada. "
+                        "Confira os registros acima para identificar o motivo."
+                    )
+
+            except Exception as e:
+                resultado_placeholder.error(
+                    f"Falha durante a busca: {type(e).__name__}: {e}"
+                )
+
+                escrever_log(
+                    f"[ERRO NÃO TRATADO] {type(e).__name__}: {e}"
+                )
 
         st.divider()
 
-        # Adicionar Site
+        # ADICIONAR SITE
         st.subheader("Adicionar Site de Vagas")
+
         with st.form("form_add_site"):
             nome_site = st.text_input("Nome da Empresa/Site")
             url_site = st.text_input("URL da Página de Carreiras")
-            usa_js = st.checkbox("O site carrega vagas com JavaScript (ex: Gupy)")
+
+            usa_js = st.checkbox(
+                "O site carrega vagas com JavaScript (ex: Gupy)"
+            )
+
             add_btn = st.form_submit_button("Adicionar Site")
 
             if add_btn:
-                if url_site.startswith("http"):
-                    db.add_source(nome_site, url_site, usa_js)
-                    st.success("Site adicionado!")
-                    time.sleep(1)
-                    st.rerun()
+                if url_site.startswith(("http://", "https://")):
+                    try:
+                        db.add_source(
+                            nome_site.strip() or url_site,
+                            url_site.strip(),
+                            usa_js
+                        )
+                        st.success("Site adicionado!")
+                    except Exception as e:
+                        st.error(f"Erro ao adicionar site: {e}")
                 else:
                     st.error("A URL deve começar com http:// ou https://")
 
-        # Listar Sites
+        # SITES MONITORADOS
         st.subheader("Sites Monitorados")
-        sites = db.list_sources()
+
+        try:
+            sites = db.list_sources()
+        except Exception as e:
+            sites = []
+            st.error(f"Erro ao carregar sites: {e}")
+
         if not sites:
             st.info("Nenhum site cadastrado.")
+
         for s in sites:
             col_s1, col_s2 = st.columns([3, 1])
+
             with col_s1:
-                st.caption(f"**{s['name']}**\n{s['url']}")
+                st.caption(
+                    f"**{s.get('name', 'Site')}**\n{s.get('url', '')}"
+                )
+
             with col_s2:
                 if st.button("🗑️", key=f"del_{s['id']}"):
-                    db.remove_source(s['id'])
-                    st.rerun()
+                    try:
+                        db.remove_source(s["id"])
+                        st.success("Site removido. Atualize a página.")
+                    except Exception as e:
+                        st.error(f"Erro ao remover site: {e}")
+
             st.divider()
 
-    # --- CONTEÚDO PRINCIPAL DA ABA DE VAGAS ---
+    # MÉTRICAS
+    st.subheader("Resumo das vagas")
 
-    # Cartões de Métricas
-    contagens = db.counts()
+    try:
+        contagens = db.counts() or {}
+    except Exception as e:
+        contagens = {}
+        st.error(f"Erro ao consultar métricas: {e}")
+
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Analisadas", contagens.get('total', 0))
-    c2.metric("Para Avaliar", contagens.get('para_avaliar', 0))
-    c3.metric("Candidatadas", contagens.get('candidatada', 0))
-    c4.metric("Em Processo", contagens.get('em_processo', 0))
-    c5.metric("Descartadas", contagens.get('descartada', 0))
+
+    c1.metric("Analisadas", contagens.get("total", 0))
+    c2.metric("Para Avaliar", contagens.get("para_avaliar", 0))
+    c3.metric("Candidatadas", contagens.get("candidatada", 0))
+    c4.metric("Em Processo", contagens.get("em_processo", 0))
+    c5.metric("Descartadas", contagens.get("descartada", 0))
 
     st.divider()
 
-    # Filtros
+    # FILTROS
     col_f1, col_f2, col_f3 = st.columns(3)
+
     with col_f1:
-        filtro_status = st.selectbox("Filtrar por Status",
-                                     ["Todas", "para_avaliar", "candidatada", "em_processo", "pendente", "descartada"])
+        filtro_status = st.selectbox(
+            "Filtrar por Status",
+            [
+                "Todas",
+                "para_avaliar",
+                "candidatada",
+                "em_processo",
+                "pendente",
+                "descartada"
+            ]
+        )
+
     with col_f2:
         filtro_busca = st.text_input("Buscar empresa ou cargo")
+
     with col_f3:
         filtro_nota = st.slider("Nota mínima", 0, 100, 0)
 
-    # Listar Vagas
-    vagas = db.list_jobs()
+    # LISTAR VAGAS
+    try:
+        vagas = db.list_jobs() or []
+    except Exception as e:
+        vagas = []
+        st.error(f"Erro ao carregar vagas: {e}")
 
-    # Aplica filtros
     vagas_filtradas = []
+
     for v in vagas:
-        if filtro_status != "Todas" and v['status'] != filtro_status:
+        if filtro_status != "Todas" and v.get("status") != filtro_status:
             continue
-        if filtro_nota > 0 and (v['score'] or 0) < filtro_nota:
+
+        if filtro_nota > 0 and (v.get("score") or 0) < filtro_nota:
             continue
+
         if filtro_busca:
             busca_lower = filtro_busca.lower()
-            titulo = str(v.get('title', '')).lower()
-            empresa = str(v.get('company', '')).lower()
+            titulo = str(v.get("title", "")).lower()
+            empresa = str(v.get("company", "")).lower()
+
             if busca_lower not in titulo and busca_lower not in empresa:
                 continue
+
         vagas_filtradas.append(v)
 
     if not vagas_filtradas:
-        st.info("Nenhuma vaga aqui ainda. Adicione um site na barra lateral e clique em Buscar vagas agora.")
+        st.info(
+            "Nenhuma vaga encontrada com esses filtros. "
+            "Execute uma busca ou ajuste os filtros."
+        )
 
     for v in vagas_filtradas:
-        # Cabeçalho da vaga
-        icone = "🟢" if (v['score'] or 0) >= 65 else "🔴" if v['status'] == 'descartada' else "🟡"
-        titulo_expander = f"{icone} Nota {v['score']} | {v['title']} - {v['company']}"
+        score_vaga = v.get("score") or 0
+        status_vaga = v.get("status", "")
+
+        icone = (
+            "🟢" if score_vaga >= 65
+            else "🔴" if status_vaga == "descartada"
+            else "🟡"
+        )
+
+        titulo_expander = (
+            f"{icone} Nota {score_vaga} | "
+            f"{v.get('title', 'Sem título')} - "
+            f"{v.get('company', 'Empresa não informada')}"
+        )
 
         with st.expander(titulo_expander):
-            st.markdown(f"**Link:** [Abrir Vaga]({v['url']})")
+
             st.markdown(
-                f"**Local:** {v['location']} | **Fonte:** {v['source']} | **Encontrada em:** {v['found_at'][:10]}")
+                f"**Link:** [Abrir Vaga]({v.get('url', '')})"
+            )
 
-            st.info(f"**Justificativa da IA:** {v['reason']}")
+            st.markdown(
+                f"**Local:** {v.get('location', '')} | "
+                f"**Fonte:** {v.get('source', '')} | "
+                f"**Encontrada em:** {str(v.get('found_at', ''))[:10]}"
+            )
 
-            if v['status'] == 'descartada':
-                st.error(f"**Motivo do Descarte:** {v['discard_reason']}")
+            st.info(
+                f"**Justificativa da IA:** {v.get('reason', '')}"
+            )
 
-            if v['cover_letter']:
-                st.warning("⚠️ **Revise antes de usar. A IA pode cometer erros.**")
-                if "[REVISAR:" in v['cover_letter']:
-                    st.error("A IA gerou um alerta nesta carta. Verifique se ela inventou alguma informação.")
-                st.text_area("Carta Sugerida", value=v['cover_letter'], height=200, key=f"carta_{v['id']}")
+            if status_vaga == "descartada":
+                st.error(
+                    f"**Motivo do Descarte:** {v.get('discard_reason', '')}"
+                )
 
-            # Controles de Status e Anotações
+            carta = v.get("cover_letter")
+
+            if carta:
+                st.warning(
+                    "⚠️ **Revise antes de usar. A IA pode cometer erros.**"
+                )
+
+                if "[REVISAR:" in carta:
+                    st.error(
+                        "A IA gerou um alerta nesta carta. "
+                        "Verifique as informações."
+                    )
+
+                st.text_area(
+                    "Carta Sugerida",
+                    value=carta,
+                    height=200,
+                    key=f"carta_{v['id']}"
+                )
+
             col_v1, col_v2 = st.columns([1, 2])
-            with col_v1:
-                # Lista de status possíveis
-                opcoes_status = ["para_avaliar", "candidatada", "em_processo", "pendente", "descartada"]
-                idx_atual = opcoes_status.index(v['status']) if v['status'] in opcoes_status else 0
 
-                novo_status = st.selectbox("Status", opcoes_status, index=idx_atual, key=f"status_{v['id']}")
-                if novo_status != v['status']:
-                    db.set_status(v['id'], novo_status)
+            with col_v1:
+                opcoes_status = [
+                    "para_avaliar",
+                    "candidatada",
+                    "em_processo",
+                    "pendente",
+                    "descartada"
+                ]
+
+                idx_atual = (
+                    opcoes_status.index(status_vaga)
+                    if status_vaga in opcoes_status
+                    else 0
+                )
+
+                novo_status = st.selectbox(
+                    "Status",
+                    opcoes_status,
+                    index=idx_atual,
+                    key=f"status_{v['id']}"
+                )
+
+                if novo_status != status_vaga:
+                    db.set_status(v["id"], novo_status)
                     st.rerun()
 
-                if st.button("Marcar como Candidatada ✅", key=f"btn_cand_{v['id']}"):
-                    db.set_status(v['id'], "candidatada")
+                if st.button(
+                    "Marcar como Candidatada ✅",
+                    key=f"btn_cand_{v['id']}"
+                ):
+                    db.set_status(v["id"], "candidatada")
                     st.rerun()
 
             with col_v2:
-                notas_atuais = v.get('notes', '') or ''
-                novas_notas = st.text_input("Minhas Anotações", value=notas_atuais, key=f"nota_{v['id']}")
+                notas_atuais = v.get("notes", "") or ""
+
+                novas_notas = st.text_input(
+                    "Minhas Anotações",
+                    value=notas_atuais,
+                    key=f"nota_{v['id']}"
+                )
+
                 if novas_notas != notas_atuais:
-                    db.set_notes(v['id'], novas_notas)
+                    db.set_notes(v["id"], novas_notas)
                     st.toast("Anotação salva!")
+
 
 # ==========================================
 # ABA 3: CONFIGURAÇÕES E TESTES
@@ -230,25 +406,45 @@ with aba_vagas:
 with aba_config:
     st.header("Configurações do Sistema")
 
-    st.subheader("Testar Conexão com a IA (DeepSeek)")
+    st.subheader("Testar Conexão com a IA")
+
     if st.button("Testar Chave da API"):
-        with st.spinner("Conectando ao DeepSeek..."):
-            sucesso, mensagem = llm.test_connection()
-            if sucesso:
-                st.success(mensagem)
-            else:
-                st.error(mensagem)
+        with st.spinner("Testando conexão com a IA..."):
+            try:
+                sucesso, mensagem = llm.test_connection()
+
+                if sucesso:
+                    st.success(mensagem)
+                else:
+                    st.error(mensagem)
+
+            except Exception as e:
+                st.error(
+                    f"Erro no teste da IA: {type(e).__name__}: {e}"
+                )
 
     st.divider()
+
     st.subheader("Exportar Dados")
-    if st.button("Baixar todas as vagas em CSV"):
-        caminho_csv = "vagas_exportadas.csv"
-        db.export_csv(caminho_csv)
-        with open(caminho_csv, "r", encoding="utf-8") as f:
+
+    if st.button("Preparar CSV com todas as vagas"):
+        try:
+            caminho_csv = "vagas_exportadas.csv"
+
+            db.export_csv(caminho_csv)
+
+            with open(caminho_csv, "rb") as arquivo:
+                dados_csv = arquivo.read()
+
             st.download_button(
-                label="Clique aqui para baixar o CSV",
-                data=f,
+                label="Baixar minhas vagas em CSV",
+                data=dados_csv,
                 file_name="minhas_vagas.csv",
                 mime="text/csv"
             )
-        os.remove(caminho_csv)  # Limpa o arquivo do servidor após gerar
+
+            if os.path.exists(caminho_csv):
+                os.remove(caminho_csv)
+
+        except Exception as e:
+            st.error(f"Erro ao exportar CSV: {e}")
