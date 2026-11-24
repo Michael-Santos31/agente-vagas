@@ -21,13 +21,16 @@ def _get_settings():
     config = get_config()
     settings = config.get("llm", {}) or {}
 
-    model = os.getenv("LLM_MODEL", settings.get(
-        "model", "openai/gpt-oss-20b"
-    ))
+    model = os.getenv(
+        "LLM_MODEL",
+        settings.get("model", "openai/gpt-oss-20b")
+    )
 
-    provider = os.getenv("LLM_PROVIDER", settings.get("provider", "groq"))
+    provider = os.getenv(
+        "LLM_PROVIDER",
+        settings.get("provider", "groq")
+    )
 
-    # O identificador openai/gpt-oss-20b é utilizado no Groq.
     if model.startswith("openai/") and "LLM_PROVIDER" not in os.environ:
         provider = "groq"
 
@@ -42,24 +45,35 @@ def _create_client(provider, base_url=None):
     from openai import OpenAI
 
     if provider == "groq":
-        api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
+        api_key = (
+            os.getenv("GROQ_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
+
         if not api_key:
-            raise ValueError("Configure GROQ_API_KEY nas variáveis de ambiente.")
+            raise ValueError(
+                "Configure GROQ_API_KEY nas variáveis de ambiente."
+            )
 
         return OpenAI(
             api_key=api_key,
-            base_url=base_url or "https://api.groq.com/openai/v1"
+            base_url="https://api.groq.com/openai/v1"
         )
 
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY")
+
         if not api_key:
             raise ValueError("Configure OPENAI_API_KEY.")
 
-        return OpenAI(api_key=api_key, base_url=base_url)
+        return OpenAI(
+            api_key=api_key,
+            base_url=base_url
+        )
 
     if provider == "deepseek":
         api_key = os.getenv("DEEPSEEK_API_KEY")
+
         if not api_key:
             raise ValueError("Configure DEEPSEEK_API_KEY.")
 
@@ -88,21 +102,52 @@ def ask(system_prompt, user_prompt, max_tokens=1500):
                     settings["base_url"]
                 )
 
-                resposta = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
+                parametros = {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": system_prompt
+                        },
+                        {
+                            "role": "user",
+                            "content": user_prompt
+                        }
                     ],
-                    max_tokens=max_tokens,
-timeout=60,
-include_reasoning=False
+                    "max_tokens": max(max_tokens, 300),
+                    "timeout": 60
+                }
+
+                if provider == "groq":
+                    parametros["include_reasoning"] = False
+                    parametros["reasoning_effort"] = "low"
+
+                resposta = client.chat.completions.create(
+                    **parametros
                 )
 
-                texto = resposta.choices[0].message.content
+                if not resposta.choices:
+                    raise RuntimeError(
+                        "A API não retornou nenhuma escolha."
+                    )
 
-                if not texto:
-                    raise RuntimeError("O modelo retornou uma resposta vazia.")
+                mensagem = resposta.choices[0].message
+                texto = mensagem.content
+
+                if isinstance(texto, list):
+                    texto = "".join(
+                        item.text
+                        for item in texto
+                        if getattr(item, "text", None)
+                    )
+
+                if not texto or not texto.strip():
+                    motivo = resposta.choices[0].finish_reason
+
+                    raise RuntimeError(
+                        f"O modelo retornou uma resposta vazia. "
+                        f"Motivo: {motivo}"
+                    )
 
                 return texto.strip()
 
@@ -110,6 +155,7 @@ include_reasoning=False
                 import anthropic
 
                 api_key = os.getenv("ANTHROPIC_API_KEY")
+
                 if not api_key:
                     raise ValueError("Configure ANTHROPIC_API_KEY.")
 
@@ -120,10 +166,13 @@ include_reasoning=False
 
                 resposta = client.messages.create(
                     model=model,
-                    max_tokens=max_tokens,
+                    max_tokens=max(max_tokens, 300),
                     system=system_prompt,
                     messages=[
-                        {"role": "user", "content": user_prompt}
+                        {
+                            "role": "user",
+                            "content": user_prompt
+                        }
                     ]
                 )
 
@@ -133,16 +182,23 @@ include_reasoning=False
                     if getattr(bloco, "type", None) == "text"
                 )
 
-                if not texto:
-                    raise RuntimeError("O modelo retornou uma resposta vazia.")
+                if not texto or not texto.strip():
+                    raise RuntimeError(
+                        "O modelo retornou uma resposta vazia."
+                    )
 
                 return texto.strip()
 
-            raise ValueError(f"Provedor não suportado: {provider}")
+            raise ValueError(
+                f"Provedor não suportado: {provider}"
+            )
 
         except Exception as erro:
             ultimo_erro = erro
-            print(f"[LLM] Tentativa {tentativa}/3 falhou: {erro}")
+
+            print(
+                f"[LLM] Tentativa {tentativa}/3 falhou: {erro}"
+            )
 
             if tentativa < 3:
                 time.sleep(tentativa * 2)
@@ -156,8 +212,8 @@ def test_connection():
     try:
         resposta = ask(
             "Você é um assistente objetivo.",
-            "Responda apenas: OK",
-            max_tokens=20
+            "Responda apenas com a palavra OK.",
+            max_tokens=300
         )
 
         return True, f"Conexão estabelecida! Resposta: {resposta}"
