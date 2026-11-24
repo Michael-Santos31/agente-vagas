@@ -1,141 +1,224 @@
+"""Avaliação de vagas e geração de cartas com o perfil salvo no painel."""
+
 import json
 import re
+
 import llm
 
 
+def _lista(valor):
+    """Converte texto ou lista em uma lista limpa de strings."""
+    if valor is None:
+        return []
+    if isinstance(valor, list):
+        return [str(item).strip() for item in valor if str(item).strip()]
+    return [
+        item.strip()
+        for item in re.split(r"[,;\n]+", str(valor))
+        if item.strip()
+    ]
+
+
+def _experiencias(perfil):
+    """Aceita tanto experiências estruturadas quanto o texto do formulário."""
+    experiencias = perfil.get("experiencias", [])
+    if isinstance(experiencias, list) and experiencias:
+        resultado = []
+        for exp in experiencias:
+            if isinstance(exp, dict):
+                partes = [
+                    exp.get("cargo", ""),
+                    exp.get("empresa", ""),
+                    exp.get("periodo", ""),
+                    exp.get("descricao", ""),
+                ]
+                texto = " | ".join(str(p).strip() for p in partes if p)
+                if texto:
+                    resultado.append(texto)
+            elif str(exp).strip():
+                resultado.append(str(exp).strip())
+        return resultado
+
+    texto = perfil.get("experiencias_txt", "")
+    resultado = []
+    for linha in str(texto).splitlines():
+        linha = linha.strip()
+        if not linha:
+            continue
+        partes = [p.strip() for p in linha.split("|")]
+        if len(partes) >= 2:
+            rotulos = ["Cargo", "Empresa", "Período", "Atividades"]
+            resultado.append(
+                " | ".join(
+                    f"{rotulos[i]}: {parte}"
+                    for i, parte in enumerate(partes[:4])
+                    if parte
+                )
+            )
+        else:
+            resultado.append(linha)
+    return resultado
+
+
+def _texto_formacao(perfil):
+    valor = perfil.get("formacao", "")
+    if isinstance(valor, list):
+        return "\n".join(f"- {str(item).strip()}" for item in valor if str(item).strip())
+    return str(valor).strip()
+
+
 def formatar_perfil_para_ia(profile_dict):
-    """Transforma o dicionário salvo no painel em texto legível para a IA."""
-    if not profile_dict:
-        return "PERFIL NÃO PREENCHIDO."
+    """Transforma os campos atuais e antigos do painel em texto para a IA."""
+    perfil = profile_dict or {}
 
-    texto = "--- DADOS DO CANDIDATO ---\n"
-    texto += f"Nome: {profile_dict.get('nome', 'Não informado')}\n"
-    texto += f"Localização: {profile_dict.get('localizacao', 'Não informada')}\n"
-    texto += f"Resumo: {profile_dict.get('resumo', '')}\n\n"
+    habilidades = _lista(
+        perfil.get("habilidades", perfil.get("habilidades_txt", ""))
+    )
+    cidades = _lista(
+        perfil.get("cidades_aceitas", perfil.get("cidades_aceitas_txt", ""))
+    )
+    cargos_nao = _lista(
+        perfil.get("cargos_nao_desejados", perfil.get("cargos_nao_txt", ""))
+    )
+    cargos_desejados = _lista(perfil.get("cargos_desejados", []))
+    experiencias = _experiencias(perfil)
 
-    texto += "EXPERIÊNCIAS:\n"
-    for exp in profile_dict.get('experiencias', []):
-        texto += f"- {exp.get('cargo')} na {exp.get('empresa')} ({exp.get('periodo')}): {exp.get('descricao')}\n"
+    exemplos = perfil.get(
+        "exemplos_escrita",
+        perfil.get("exemplos_escrita_txt", "")
+    )
+    if isinstance(exemplos, list):
+        exemplos_texto = "\n\n".join(
+            str(item).strip() for item in exemplos if str(item).strip()
+        )
+    else:
+        exemplos_texto = str(exemplos or "").strip()
 
-    texto += "\nFORMAÇÃO E CURSOS:\n"
-    for form in profile_dict.get('formacao', []):
-        texto += f"- {form}\n"
+    linhas = [
+        "--- DADOS DO CANDIDATO ---",
+        f"Nome: {perfil.get('nome', 'Não informado')}",
+        f"Localização: {perfil.get('localizacao', 'Não informada')}",
+        f"Resumo profissional: {perfil.get('resumo', '')}",
+        "",
+        "EXPERIÊNCIAS PROFISSIONAIS:",
+    ]
 
-    texto += "\nHABILIDADES REAIS:\n"
-    texto += f"- {', '.join(profile_dict.get('habilidades', []))}\n\n"
+    linhas.extend(f"- {item}" for item in experiencias)
+    if not experiencias:
+        linhas.append("- Não informado")
 
-    texto += "O QUE BUSCO:\n"
-    texto += f"- Cargos desejados: {', '.join(profile_dict.get('cargos_desejados', []))}\n"
-    texto += f"- Cargos que NÃO quero: {', '.join(profile_dict.get('cargos_nao_desejados', []))}\n"
-    texto += f"- Modelo de trabalho: {profile_dict.get('modelo_trabalho', '')}\n"
-    texto += f"- Cidades aceitas: {', '.join(profile_dict.get('cidades_aceitas', []))}\n"
-    texto += f"- Salário mínimo: R$ {profile_dict.get('salario_minimo', 'A combinar')}\n\n"
+    linhas.extend(["", "FORMAÇÃO E CURSOS:", _texto_formacao(perfil) or "- Não informado"])
+    linhas.extend(["", "HABILIDADES INFORMADAS:"])
+    linhas.extend(f"- {item}" for item in habilidades)
+    if not habilidades:
+        linhas.append("- Não informado")
 
-    texto += "MEU JEITO DE ESCREVER (EXEMPLOS):\n"
-    for i, exemplo in enumerate(profile_dict.get('exemplos_escrita', [])):
-        if exemplo.strip():
-            texto += f"--- Exemplo {i + 1} ---\n{exemplo}\n\n"
+    linhas.extend([
+        "",
+        "PREFERÊNCIAS DE TRABALHO:",
+        f"Cargos desejados: {', '.join(cargos_desejados) or 'Não especificados'}",
+        f"Cargos não desejados: {', '.join(cargos_nao) or 'Não especificados'}",
+        f"Modelo de trabalho: {perfil.get('modelo_trabalho', 'Não informado')}",
+        f"Cidades aceitas: {', '.join(cidades) or 'Não especificadas'}",
+        f"Salário mínimo desejado: {perfil.get('salario_minimo', 'Não informado')}",
+        "",
+        "EXEMPLOS DO JEITO DE ESCREVER DO CANDIDATO:",
+        exemplos_texto or "Nenhum exemplo fornecido.",
+    ])
 
-    return texto
+    return "\n".join(linhas)
+
+
+def _extrair_json(texto):
+    """Extrai e valida o objeto JSON retornado pelo modelo."""
+    match = re.search(r"\{.*\}", texto, re.DOTALL)
+    if not match:
+        raise ValueError("A resposta da IA não contém um objeto JSON.")
+    resultado = json.loads(match.group(0))
+    if not isinstance(resultado, dict):
+        raise ValueError("A resposta da IA não é um objeto JSON.")
+    return resultado
 
 
 def evaluate(job_text, url, profile_dict):
-    """Avalia a vaga usando o DeepSeek e retorna um dicionário com os resultados."""
+    """Avalia a compatibilidade de uma vaga com o perfil do candidato."""
     perfil_txt = formatar_perfil_para_ia(profile_dict)
 
-    system_prompt = """Você é um avaliador rigoroso de vagas de emprego trabalhando para a pessoa descrita no PERFIL.
-Leia o texto da página e responda SOMENTE com um JSON, sem comentários antes ou depois, no formato exato:
+    system_prompt = """Você é um avaliador rigoroso de vagas de emprego.
+Responda SOMENTE com um objeto JSON válido, sem Markdown, neste formato:
 {
-  "is_job_posting": true/false,
+  "is_job_posting": true,
   "title": "título da vaga",
   "company": "nome da empresa",
   "location": "localização",
-  "score": 0-100,
-  "reason": "2 a 3 frases objetivas justificando a nota",
-  "discard_reason": "motivo curto se a nota for baixa, senão vazio",
-  "missing_requirements": ["lista de exigências obrigatórias que a pessoa não tem"]
+  "score": 0,
+  "reason": "justificativa objetiva",
+  "discard_reason": "",
+  "missing_requirements": []
 }
 
-REGRAS CRÍTICAS:
-1. Se a página NÃO for uma vaga específica (ex: lista de vagas, página inicial, blog, login), defina is_job_posting=false e score=0.
-2. A nota mede a compatibilidade REAL. Considere cargo desejado, habilidades que a pessoa TEM, localização, modelo de trabalho, salário mínimo e senioridade.
-3. Se a vaga exigir algo obrigatório que a pessoa NÃO tem, reduza muito a nota.
-4. Cargo na lista 'NÃO quero', ou salário claramente abaixo do mínimo, resulta em nota abaixo de 40.
-5. Vaga fora das cidades aceitas e que não seja remota: nota abaixo de 50.
-6. Se o salário não aparecer, não penalize; apenas avise na justificativa.
-7. NUNCA presuma habilidade que não esteja no PERFIL."""
+Regras:
+1. Se o conteúdo não for uma vaga específica, use is_job_posting=false e score=0.
+2. Avalie compatibilidade real considerando experiências, habilidades, formação,
+localização, modelo de trabalho, salário e senioridade informados.
+3. Não presuma que o candidato possui habilidades ou experiências não listadas.
+4. Se exigir requisito obrigatório ausente, reduza a nota e informe-o em
+missing_requirements.
+5. Cargo explicitamente não desejado ou salário abaixo do mínimo informado
+deve reduzir bastante a nota.
+6. Se salário não estiver publicado, não penalize por isso; mencione a ausência.
+7. Não invente informações sobre a vaga ou sobre o candidato.
+8. score deve ser um número inteiro de 0 a 100."""
 
-    user_prompt = f"AVALIE A SEGUINTE VAGA:\nURL: {url}\n\nTEXTO DA VAGA:\n{job_text}\n\n{perfil_txt}"
+    user_prompt = (
+        f"AVALIE A SEGUINTE VAGA:\nURL: {url}\n\n"
+        f"TEXTO DA VAGA:\n{job_text}\n\n{perfil_txt}"
+    )
 
     try:
-        resposta_ia = llm.ask(system_prompt, user_prompt, max_tokens=800)
-    except Exception as e:
-        print(f"Erro na IA ao avaliar: {e}")
-        return None
-
-    # Tenta extrair o JSON da resposta usando Regex (tolerante a erros da IA)
-    try:
-        match = re.search(r'\{.*\}', resposta_ia, re.DOTALL)
-        if match:
-            json_str = match.group(0)
-            resultado = json.loads(json_str)
-        else:
-            resultado = json.loads(resposta_ia)
-
-        # Validações de segurança
-        resultado['score'] = max(0, min(100, int(resultado.get('score', 0))))
-        resultado['is_job_posting'] = bool(resultado.get('is_job_posting', False))
-        resultado['reason'] = resultado.get('reason', 'Sem justificativa.')
-        resultado['discard_reason'] = resultado.get('discard_reason', '')
-        resultado['missing_requirements'] = resultado.get('missing_requirements', [])
-
+        resposta = llm.ask(system_prompt, user_prompt, max_tokens=1000)
+        resultado = _extrair_json(resposta)
+        resultado["score"] = max(0, min(100, int(resultado.get("score", 0))))
+        resultado["is_job_posting"] = bool(resultado.get("is_job_posting", False))
+        resultado.setdefault("title", "Título não identificado")
+        resultado.setdefault("company", "Empresa não identificada")
+        resultado.setdefault("location", "Não informada")
+        resultado.setdefault("reason", "Sem justificativa.")
+        resultado.setdefault("discard_reason", "")
+        requisitos = resultado.get("missing_requirements", [])
+        resultado["missing_requirements"] = (
+            requisitos if isinstance(requisitos, list) else [str(requisitos)]
+        )
         return resultado
-
-    except Exception as e:
-        print(f"Falha ao ler JSON da IA. Resposta bruta: {resposta_ia}")
-        # Segunda tentativa: pedir apenas o JSON de forma agressiva
-        try:
-            user_prompt_correcao = f"A resposta anterior não foi um JSON válido. Responda APENAS o JSON, sem formatação markdown.\n\n{user_prompt}"
-            resposta_ia2 = llm.ask(system_prompt, user_prompt_correcao, max_tokens=800)
-            match = re.search(r'\{.*\}', resposta_ia2, re.DOTALL)
-            return json.loads(match.group(0) if match else resposta_ia2)
-        except:
-            raise Exception("A IA falhou em retornar um formato válido após 2 tentativas.")
+    except Exception as erro:
+        print(f"Erro ao avaliar vaga: {erro}")
+        return None
 
 
 def write_letter(job_text, job, profile_dict):
-    """Escreve a carta de apresentação usando o DeepSeek."""
+    """Gera uma carta curta, usando apenas informações presentes no perfil."""
     perfil_txt = formatar_perfil_para_ia(profile_dict)
 
-    system_prompt = """Você escreve textos de apresentação curtos para candidaturas, na VOZ da pessoa do PERFIL.
-Imite o tom, o ritmo e o vocabulário dos exemplos da seção 'MEU JEITO DE ESCREVER'.
-Português do Brasil, 120 a 180 palavras, sem saudações exageradas, sem clichês ('sou proativo', 'apaixonado por desafios').
-REGRAS ABSOLUTAS: 
-1. Use SOMENTE fatos que estão no PERFIL. 
-2. NÃO invente habilidade, número, empresa ou formação. 
-3. Cite 1 ou 2 pontos concretos da vaga que combinem com a experiência real. 
-4. Se a vaga pedir algo que a pessoa não tem, não mencione.
-Devolva APENAS o texto da carta, nada mais."""
+    system_prompt = """Você escreve cartas de apresentação em português do Brasil,
+na voz do candidato descrito no perfil.
+Escreva entre 120 e 180 palavras, com tom natural, profissional e direto.
+Use somente fatos presentes no perfil. Não invente habilidades, resultados,
+números, empresas, cursos ou experiências. Relacione a experiência real do
+candidato a pontos concretos da vaga. Se não houver informação suficiente,
+seja transparente e não preencha lacunas com suposições.
+Imite o estilo dos exemplos fornecidos, se existirem.
+Retorne somente o texto da carta."""
 
-    user_prompt = f"VAGA:\nCargo: {job.get('title')}\nEmpresa: {job.get('company')}\nDescrição: {job_text}\n\n{perfil_txt}\n\nEscreva a carta de apresentação."
+    user_prompt = (
+        f"VAGA:\nCargo: {job.get('title', '')}\n"
+        f"Empresa: {job.get('company', '')}\n"
+        f"Descrição:\n{job_text}\n\n{perfil_txt}\n\n"
+        "Escreva a carta de apresentação."
+    )
 
     try:
         carta = llm.ask(system_prompt, user_prompt, max_tokens=600)
-
-        # Validação simples anti-alucinação: verifica se a carta cita ferramentas/empresas que não existem no perfil
-        # Para isso, pegamos palavras capitalizadas na carta (nomes próprios/ferramentas)
-        palavras_carta = set(re.findall(r'\b[A-Z][a-z]+(?:[A-Z][a-z]+)?\b', carta))
-        texto_perfil_e_vaga = (perfil_txt + job_text).lower()
-
-        for palavra in palavras_carta:
-            # Se for uma palavra longa (nome próprio ou ferramenta) e não estiver no texto original
-            if len(palavra) > 4 and palavra.lower() not in texto_perfil_e_vaga and palavra not in ['Português',
-                                                                                                   'Brasil', 'Você',
-                                                                                                   'Vaga', 'Empresa']:
-                carta += "\n\n[REVISAR: possível informação não presente no perfil]"
-                break  # Só coloca o aviso uma vez
-
         return carta.strip()
-    except Exception as e:
-        print(f"Erro ao gerar carta: {e}")
+    except Exception as erro:
+        print(f"Erro ao gerar carta: {erro}")
         return "Erro ao gerar a carta. Tente novamente mais tarde."
