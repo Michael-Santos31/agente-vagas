@@ -1,4 +1,6 @@
+
 streamlit
+pandas
 requests
 beautifulsoup4
 pyyaml
@@ -8,3 +10,4 @@ imap-tools
 openai
 anthropic
 psycopg[binary]>=3.2
+playwright>=1.49.0
