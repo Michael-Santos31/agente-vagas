@@ -1,4 +1,3 @@
-
 streamlit
 pandas
 requests
@@ -10,4 +9,4 @@ imap-tools
 openai
 anthropic
 psycopg[binary]>=3.2
-playwright>=1.49.0
+playwright==1.49.0
