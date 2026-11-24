@@ -50,10 +50,8 @@ def get_robots_parser(url):
         )
 
         if response.status_code == 404:
-            # Arquivo inexistente: não há regras publicadas.
             rp.parse([])
         elif response.status_code >= 400:
-            # Em caso de bloqueio ou erro do servidor, não prossegue.
             rp.parse(["User-agent: *", "Disallow: /"])
         else:
             rp.parse(response.text.splitlines())
@@ -68,7 +66,6 @@ def get_robots_parser(url):
 
 def permitido_por_robots(url):
     rp = get_robots_parser(url)
-
     permitido = rp.can_fetch(HEADERS["User-Agent"], url)
 
     if not permitido:
@@ -81,7 +78,6 @@ def respeitar_intervalo(domain):
     """Mantém intervalo mínimo entre requisições ao mesmo domínio."""
     agora = time.time()
     ultima = _last_request_time.get(domain, 0)
-
     espera = 3 - (agora - ultima)
 
     if espera > 0:
@@ -91,7 +87,7 @@ def respeitar_intervalo(domain):
 
 
 def instalar_chromium():
-    """Instala o Chromium uma única vez, se ainda não estiver disponível."""
+    """Instala o Chromium uma única vez, se necessário."""
     global _playwright_ready
 
     if _playwright_ready:
@@ -126,7 +122,7 @@ def instalar_chromium():
                     return False
 
             if not Path(p.chromium.executable_path).is_file():
-                log("[ERRO] Chromium continua indisponível após a instalação.")
+                log("[ERRO] Chromium continua indisponível.")
                 return False
 
         _playwright_ready = True
@@ -174,10 +170,8 @@ def baixar_com_playwright(url):
                     )
                     return ""
 
-                # Pequena espera para o conteúdo dinâmico carregar.
                 page.wait_for_timeout(1500)
 
-                # Não tenta resolver captchas, logins ou bloqueios.
                 titulo = page.title().lower()
 
                 if any(
@@ -232,57 +226,191 @@ def get_html(url, js=False):
         return ""
 
 
+def build_gupy_search_url(base_url, state="", city=""):
+    """Aplica filtros de estado e cidade à busca global da Gupy."""
+    parsed = urlparse(base_url)
+
+    if (
+        parsed.netloc.lower() != "portal.gupy.io"
+        or "/job-search" not in parsed.path
+    ):
+        return base_url
+
+    prefix, marker, tail = parsed.path.partition("/job-search/")
+
+    if not marker:
+        prefix = parsed.path.rstrip("/")
+        tail = ""
+
+    partes = [
+        p for p in re.split(r"[&/]", tail) if p
+    ]
+
+    partes += [
+        p for p in parsed.query.split("&") if p
+    ]
+
+    partes = [
+        p for p in partes
+        if not p.lower().startswith(("state=", "city="))
+    ]
+
+    from urllib.parse import quote
+
+    if state:
+        partes.append("state=" + quote(str(state), safe=""))
+
+    if city:
+        partes.append("city=" + quote(str(city), safe=""))
+
+    caminho = prefix.rstrip("/") + "/job-search"
+
+    if partes:
+        caminho += "/" + "&".join(partes)
+
+    return parsed._replace(
+        path=caminho,
+        query=""
+    ).geturl()
+
+
 def extract_job_links(html, base_url, limit=25):
-    """Encontra links que parecem ser de vagas."""
+    """Extrai anúncios individuais e ignora páginas de filtros."""
     soup = BeautifulSoup(html, "html.parser")
     links = []
 
-    palavras_chave = [
-        "vaga",
-        "job",
-        "career",
-        "carreira",
-        "oportunidade",
-        "position",
-        "opening",
-        "apply",
-        "candidat",
-        "posting",
-    ]
+    portal_gupy = (
+        urlparse(base_url).netloc.lower() == "portal.gupy.io"
+    )
 
-    redes_sociais = [
+    sociais = (
         "facebook.com",
         "instagram.com",
         "twitter.com",
         "youtube.com",
         "tiktok.com",
         "whatsapp.com",
-    ]
+    )
 
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        texto = a.get_text(strip=True).lower()
+    def anuncio(url):
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        path = parsed.path.lower()
 
-        if href.startswith(("mailto:", "tel:", "javascript:", "#")):
-            continue
+        if any(s in host for s in sociais):
+            return False
 
-        url_absoluta = urljoin(base_url, href).split("#")[0]
-        href_lower = url_absoluta.lower()
-
-        if any(rede in href_lower for rede in redes_sociais):
-            continue
-
-        if any(
-            palavra in href_lower or palavra in texto
-            for palavra in palavras_chave
+        if (
+            "job-search" in path
+            or "/state=" in path
+            or "/city=" in path
         ):
-            if url_absoluta != base_url and url_absoluta not in links:
-                links.append(url_absoluta)
+            return False
 
-        if len(links) >= limit:
-            break
+        rota_vaga = re.search(
+            r"/(?:job|jobs|candidates/jobs)/[^/]+",
+            path
+        )
 
-    return links
+        if portal_gupy or host.endswith(".gupy.io"):
+            return (
+                host.endswith(".gupy.io")
+                and rota_vaga is not None
+            )
+
+        termos = (
+            "vaga",
+            "job",
+            "career",
+            "carreira",
+            "oportunidade",
+            "position",
+            "opening",
+            "apply",
+            "candidat",
+            "posting",
+        )
+
+        return any(t in url.lower() for t in termos)
+
+    for tag in soup.find_all("a", href=True):
+        href = tag["href"].strip()
+
+        if href.startswith(
+            ("mailto:", "tel:", "javascript:", "#")
+        ):
+            continue
+
+        url = urljoin(
+            base_url,
+            href
+        ).split("#")[0].rstrip("/")
+
+        if (
+            url
+            and url != base_url.rstrip("/")
+            and anuncio(url)
+            and url not in links
+        ):
+            links.append(url)
+
+            if len(links) >= limit:
+                return links
+
+    # Procura também anúncios publicados em dados estruturados.
+    for script in soup.find_all(
+        "script",
+        type="application/ld+json"
+    ):
+        try:
+            data = json.loads(
+                script.string or script.get_text()
+            )
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        pilha = data if isinstance(data, list) else [data]
+
+        while pilha:
+            item = pilha.pop()
+
+            if isinstance(item, list):
+                pilha.extend(item)
+
+            elif isinstance(item, dict):
+                tipo = item.get("@type")
+
+                if (
+                    tipo == "JobPosting"
+                    or (
+                        isinstance(tipo, list)
+                        and "JobPosting" in tipo
+                    )
+                ):
+                    destino = (
+                        item.get("url")
+                        or item.get("sameAs")
+                    )
+
+                    if isinstance(destino, str):
+                        url = urljoin(
+                            base_url,
+                            destino
+                        ).split("#")[0]
+
+                        if anuncio(url) and url not in links:
+                            links.append(url)
+
+                            if len(links) >= limit:
+                                return links
+
+                pilha.extend(
+                    v
+                    for v in item.values()
+                    if isinstance(v, (dict, list))
+                )
+
+    return links[:limit]
 
 
 def page_text(html):
@@ -290,7 +418,10 @@ def page_text(html):
     soup = BeautifulSoup(html, "html.parser")
     texto_extraido = ""
 
-    for script in soup.find_all("script", type="application/ld+json"):
+    for script in soup.find_all(
+        "script",
+        type="application/ld+json"
+    ):
         try:
             if not script.string and not script.get_text(strip=True):
                 continue
@@ -321,7 +452,11 @@ def page_text(html):
                     f"Descrição: {item.get('description', '')}\n\n"
                 )
 
-        except (json.JSONDecodeError, TypeError, AttributeError):
+        except (
+            json.JSONDecodeError,
+            TypeError,
+            AttributeError
+        ):
             continue
 
     for tag in soup([
@@ -348,14 +483,12 @@ def page_text(html):
 
 
 if __name__ == "__main__":
-    import sys
-
     if len(sys.argv) > 1:
         url_teste = sys.argv[1]
 
         print(f"Testando raspagem: {url_teste}")
 
-        html = get_html(url_teste)
+        html = get_html(url_teste, js=True)
 
         if html:
             links = extract_job_links(
