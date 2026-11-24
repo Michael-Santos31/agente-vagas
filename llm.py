@@ -52,9 +52,7 @@ def _create_client(provider, base_url=None):
         )
 
         if not api_key:
-            raise ValueError(
-                "Configure GROQ_API_KEY nas variáveis de ambiente."
-            )
+            raise ValueError("Configure GROQ_API_KEY.")
 
         return OpenAI(
             api_key=api_key,
@@ -117,15 +115,13 @@ def ask(system_prompt, user_prompt, max_tokens=1500):
 
                 if provider == "groq":
                     parametros["max_completion_tokens"] = max(
-                        max_tokens, 1024
+                        max_tokens, 2048
                     )
-                    parametros["include_reasoning"] = False
 
-                    if model in (
-                        "openai/gpt-oss-20b",
-                        "openai/gpt-oss-120b"
-                    ):
-                        parametros["reasoning_effort"] = "low"
+                    parametros["extra_body"] = {
+                        "include_reasoning": False,
+                        "reasoning_effort": "low"
+                    }
                 else:
                     parametros["max_tokens"] = max(
                         max_tokens, 1024
@@ -153,19 +149,9 @@ def ask(system_prompt, user_prompt, max_tokens=1500):
 
                 if not texto or not texto.strip():
                     motivo = escolha.finish_reason
-                    raciocinio = getattr(
-                        mensagem, "reasoning", None
-                    )
-
-                    tamanho_raciocinio = (
-                        len(raciocinio) if raciocinio else 0
-                    )
 
                     raise RuntimeError(
-                        "Resposta vazia da API. "
-                        f"Motivo: {motivo}. "
-                        f"Caracteres de raciocínio: "
-                        f"{tamanho_raciocinio}."
+                        f"Resposta vazia. Motivo: {motivo}."
                     )
 
                 return texto.strip()
