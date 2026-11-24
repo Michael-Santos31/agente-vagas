@@ -95,7 +95,8 @@ def ask(system_prompt, user_prompt, max_tokens=1500):
                         {"role": "user", "content": user_prompt}
                     ],
                     max_tokens=max_tokens,
-                    timeout=60
+timeout=60,
+include_reasoning=False
                 )
 
                 texto = resposta.choices[0].message.content
